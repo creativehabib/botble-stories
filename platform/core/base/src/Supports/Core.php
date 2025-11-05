@@ -6,7 +6,6 @@ use Botble\Base\Events\LicenseActivated;
 use Botble\Base\Events\LicenseActivating;
 use Botble\Base\Events\LicenseDeactivated;
 use Botble\Base\Events\LicenseDeactivating;
-use Botble\Base\Events\LicenseInvalid;
 use Botble\Base\Events\LicenseRevoked;
 use Botble\Base\Events\LicenseRevoking;
 use Botble\Base\Events\LicenseUnverified;
@@ -27,7 +26,6 @@ use Botble\Base\Events\SystemUpdatePublishing;
 use Botble\Base\Events\SystemUpdateUnavailable;
 use Botble\Base\Exceptions\CouldNotConnectToLicenseServerException;
 use Botble\Base\Exceptions\LicenseInvalidException;
-use Botble\Base\Exceptions\LicenseIsAlreadyActivatedException;
 use Botble\Base\Exceptions\MissingCURLExtensionException;
 use Botble\Base\Exceptions\MissingZipExtensionException;
 use Botble\Base\Exceptions\RequiresLicenseActivatedException;
@@ -178,41 +176,12 @@ final class Core
         return $this->minimumPhpVersion;
     }
 
-    /**
-     * @throws \Botble\Base\Exceptions\LicenseInvalidException
-     * @throws \Botble\Base\Exceptions\LicenseIsAlreadyActivatedException
-     */
     public function activateLicense(string $license, string $client): bool
     {
         LicenseActivating::dispatch($license, $client);
 
-        $response = $this->createRequest('activate_license', [
-            'product_id' => $this->productId,
-            'license_code' => $license,
-            'client_name' => $client,
-            'verify_type' => $this->productSource,
-        ]);
-
-        if ($response->failed()) {
-            throw new LicenseInvalidException('Could not activate your license. Please try again later.');
-        }
-
-        $data = $response->json();
-
-        if (! Arr::get($data, 'status')) {
-            $message = Arr::get($data, 'message');
-
-            if (Arr::get($data, 'status_code') === 'ACTIVATED_MAXIMUM_ALLOWED_PRODUCT_INSTANCES') {
-                throw new LicenseIsAlreadyActivatedException($message);
-            }
-
-            LicenseInvalid::dispatch($license, $client);
-
-            throw new LicenseInvalidException($message);
-        }
-
         try {
-            $licenseContent = Arr::get($data, 'lic_response');
+            $licenseContent = $this->generateOfflineLicenseContent($license, $client);
 
             if ($this->isLicenseStoredInDatabase()) {
                 Setting::forceSet('license_file_content', $licenseContent)->save();
@@ -774,23 +743,15 @@ final class Core
 
     private function createDeactivateRequest(array $data): bool
     {
-        $response = $this->createRequest('deactivate_license', $data);
-
-        $data = $response->json();
-
-        if ($response->ok() && Arr::get($data, 'status')) {
-            if ($this->isLicenseStoredInDatabase()) {
-                Setting::forceDelete('license_file_content');
-            } else {
-                $this->files->delete($this->licenseFilePath);
-            }
-
-            $this->forgotLicensedInformation();
-
-            return true;
+        if ($this->isLicenseStoredInDatabase()) {
+            Setting::forceDelete('license_file_content');
+        } elseif ($this->files->exists($this->licenseFilePath)) {
+            $this->files->delete($this->licenseFilePath);
         }
 
-        return false;
+        $this->forgotLicensedInformation();
+
+        return true;
     }
 
     private function getClientIpAddress(): string
@@ -817,37 +778,22 @@ final class Core
             return false;
         }
 
-        $data = [
+        LicenseVerified::dispatch();
+
+        return true;
+    }
+
+    private function generateOfflineLicenseContent(string $license, string $client): string
+    {
+        $payload = [
             'product_id' => $this->productId,
-            'license_file' => $this->getLicenseFile(),
+            'license_code' => $license,
+            'client_name' => $client,
+            'generated_at' => Carbon::now()->toIso8601String(),
+            'domain' => parse_url(url('/'), PHP_URL_HOST),
         ];
 
-        try {
-            $response = $this->createRequest('verify_license', $data, $timeoutInSeconds);
-        } catch (CouldNotConnectToLicenseServerException) {
-            return true;
-        }
-
-        $data = $response->json();
-
-        if ($response->ok() && Arr::get($data, 'status')) {
-            LicenseVerified::dispatch();
-
-            return true;
-        } else {
-            LicenseUnverified::dispatch();
-
-            $statusCode = Arr::get($data, 'status_code');
-            $message = Arr::get($data, 'message', '');
-
-            if ($statusCode === 'LICENSE_DEACTIVATED' ||
-                (Str::contains(Str::lower($message), ['deactivated', 'invalid', 'not found']) &&
-                ! Str::contains(Str::lower($message), 'blocked'))) {
-                $this->handleDeactivatedLicense();
-            }
-
-            return false;
-        }
+        return base64_encode(json_encode($payload));
     }
 
     private function parseProductUpdateResponse(Response $response): CoreProduct|false
