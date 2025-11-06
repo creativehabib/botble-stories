@@ -13,7 +13,7 @@ class InstallCommand extends Command
 {
     public function handle(): int
     {
-        if (! confirm('Do you want to proceed with installation?', true)) {
+        if (! confirm('Do you want to proceed with installation?')) {
             return self::SUCCESS;
         }
 
@@ -23,19 +23,19 @@ class InstallCommand extends Command
         $this->call('migrate:fresh');
         $this->components->info('Migrate done!');
 
-        if (confirm('Create a new super user?', true)) {
+        if (confirm('Create a new super user?')) {
             $this->call('cms:user:create');
         }
 
-        if (confirm('Do you want to activate all plugins?', true)) {
+        if (confirm('Do you want to activate all plugins?')) {
             $this->components->info('Activating all plugins...');
             $this->call('cms:plugin:activate:all');
             $this->components->info('All plugins are activated!');
         }
 
-        if (confirm('Do you want to install sample data?', true)) {
+        if (confirm('Do you want to install sample data?')) {
             $this->components->info('Seeding...');
-            $this->call('db:seed', ['--force' => true]);
+            $this->call('db:seed');
             $this->components->info('Seeding done!');
         }
 
