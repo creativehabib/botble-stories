@@ -35,7 +35,7 @@ class InstallCommand extends Command
 
         if (confirm('Do you want to install sample data?', true)) {
             $this->components->info('Seeding...');
-            $this->call('db:seed');
+            $this->call('db:seed', ['--force' => true]);
             $this->components->info('Seeding done!');
         }
 
